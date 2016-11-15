@@ -22,6 +22,7 @@
 
 #include "SITL.h"
 #include <AP_Terrain/AP_Terrain.h>
+#include <AP_HAL/utility/Socket.h>
 
 namespace SITL {
 
@@ -110,6 +111,7 @@ protected:
     SITL *sitl;
     Location home;
     Location location;
+    SocketAPM udpdevice;
 
     float ground_level;
     float home_yaw;

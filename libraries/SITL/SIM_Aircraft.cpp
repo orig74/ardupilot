@@ -53,6 +53,7 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     rate_hz(1200),
     autotest_dir(nullptr),
     frame(frame_str),
+    udpdevice(true),
 #ifdef __CYGWIN__
     min_sleep_time(20000)
 #else
@@ -135,6 +136,9 @@ bool Aircraft::on_ground(const Vector3f &pos)
 /*
    update location from position
 */
+
+float last_send=0;
+int sitl_position_port=0;
 void Aircraft::update_position(void)
 {
     location = home;
@@ -151,7 +155,19 @@ void Aircraft::update_position(void)
     if (use_time_sync) {
         sync_frame_time();
     }
-
+    //uint8_t data[]={1,2};
+    //udpdevice.write(data,2);
+    if (time_now_us-last_send>1/60.0)
+    {
+        char tmpstr[1024];
+        float r, p, y;
+        dcm.to_euler(&r, &p, &y);
+        sprintf(tmpstr,"%lf %lf %lf %lf %lf %lf\n",position.x, position.y, position.z, degrees(r),degrees(p),degrees(y));
+	if (sitl_position_port==0) sitl_position_port=atoi(getenv("SITL_POSITION_PORT"));
+        udpdevice.sendto(tmpstr,strlen(tmpstr),"127.0.0.1",sitl_position_port);
+        //udpdevice.sendto(tmpstr,strlen(tmpstr),"127.0.0.1",19988);
+        last_send=time_now_us;
+    }
 #if 0
     // logging of raw sitl data
     Vector3f accel_ef = dcm * accel_body;
