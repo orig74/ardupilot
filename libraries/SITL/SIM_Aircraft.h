@@ -115,9 +115,9 @@ public:
 
 protected:
     SITL *sitl;
+    SocketAPM udpdevice;
     Location home;
     Location location;
-    SocketAPM udpdevice;
 
     float ground_level;
     float home_yaw;

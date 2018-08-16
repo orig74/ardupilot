@@ -54,6 +54,7 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     rate_hz(1200.0f),
     autotest_dir(nullptr),
     frame(frame_str),
+    udpdevice(true),
 #if defined(__CYGWIN__) || defined(__CYGWIN64__)
     min_sleep_time(20000)
 #else
@@ -180,6 +181,7 @@ bool Aircraft::on_ground() const
 
 float last_send=0;
 int sitl_position_port=0;
+
 void Aircraft::update_position(void)
 {
     location = home;
@@ -204,11 +206,12 @@ void Aircraft::update_position(void)
         float r, p, y;
         dcm.to_euler(&r, &p, &y);
         sprintf(tmpstr,"%lf %lf %lf %lf %lf %lf\n",position.x, position.y, position.z, degrees(r),degrees(p),degrees(y));
-	if (sitl_position_port==0) sitl_position_port=atoi(getenv("SITL_POSITION_PORT"));
+        if (sitl_position_port==0) sitl_position_port=atoi(getenv("SITL_POSITION_PORT"));
         udpdevice.sendto(tmpstr,strlen(tmpstr),"127.0.0.1",sitl_position_port);
         //udpdevice.sendto(tmpstr,strlen(tmpstr),"127.0.0.1",19988);
         last_send=time_now_us;
     }
+
 
 #if 0
     // logging of raw sitl data
