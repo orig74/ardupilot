@@ -64,22 +64,12 @@ void MultiCopter::update(const struct sitl_input &input)
     calculate_forces(input, rot_accel, accel_body);
 
     update_dynamics(rot_accel);
+    update_external_payload(input);
 
     // update lat/lon/altitude
     update_position();
+    time_advance();
 
     // update magnetic field
     update_mag_field_bf();
-
-    // update sprayer
-    sprayer.update(input);
-
-    // update gripper
-    gripper.update(input);
-    gripper_epm.update(input);
-}
-
-float MultiCopter::gross_mass() const
-{
-    return Aircraft::gross_mass() + sprayer.payload_mass();
 }

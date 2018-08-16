@@ -39,8 +39,8 @@ private:
     bool _calibrate();
     bool _setup_sampling_mode();
 
-    bool _timer();
-    
+    void _timer();
+
     /* Read a single sample */
     bool _read_sample();
 
@@ -89,6 +89,8 @@ public:
 
     // return 24 bit bus identifier
     virtual uint32_t get_bus_id(void) const = 0;
+
+    virtual void set_retries(uint8_t retries) {}
 };
 
 class AP_HMC5843_BusDriver_HALDevice : public AP_HMC5843_BusDriver
@@ -112,6 +114,10 @@ public:
     // return 24 bit bus identifier
     uint32_t get_bus_id(void) const override {
         return _dev->get_bus_id();
+    }
+
+    void set_retries(uint8_t retries) override {
+        return _dev->set_retries(retries);
     }
     
 private:

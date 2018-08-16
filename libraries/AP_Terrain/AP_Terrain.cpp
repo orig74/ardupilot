@@ -25,10 +25,12 @@
 
 #include <assert.h>
 #include <stdio.h>
+#if HAL_OS_POSIX_IO
 #include <unistd.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#endif
+#include <sys/types.h>
 #include <errno.h>
 
 extern const AP_HAL::HAL& hal;
@@ -45,7 +47,7 @@ const AP_Param::GroupInfo AP_Terrain::var_info[] = {
     // @Param: SPACING
     // @DisplayName: Terrain grid spacing
     // @Description: Distance between terrain grid points in meters. This controls the horizontal resolution of the terrain data that is stored on te SD card and requested from the ground station. If your GCS is using the worldwide SRTM database then a resolution of 100 meters is appropriate. Some parts of the world may have higher resolution data available, such as 30 meter data available in the SRTM database in the USA. The grid spacing also controls how much data is kept in memory during flight. A larger grid spacing will allow for a larger amount of data in memory. A grid spacing of 100 meters results in the vehicle keeping 12 grid squares in memory with each grid square having a size of 2.7 kilometers by 3.2 kilometers. Any additional grid squares are stored on the SD once they are fetched from the GCS and will be demand loaded as needed.
-    // @Units: meters
+    // @Units: m
     // @Increment: 1
     // @User: Advanced
     AP_GROUPINFO("SPACING",   1, AP_Terrain, grid_spacing, 100),
@@ -59,20 +61,9 @@ AP_Terrain::AP_Terrain(AP_AHRS &_ahrs, const AP_Mission &_mission, const AP_Rall
     mission(_mission),
     rally(_rally),
     disk_io_state(DiskIoIdle),
-    fd(-1),
-    timer_setup(false),
-    file_lat_degrees(0),
-    file_lon_degrees(0),
-    io_failure(false),
-    directory_created(false),
-    home_height(0),
-    have_current_loc_height(false),
-    last_current_loc_height(0)
+    fd(-1)
 {
     AP_Param::setup_object_defaults(this, var_info);
-    memset(&home_loc, 0, sizeof(home_loc));
-    memset(&disk_block, 0, sizeof(disk_block));
-    memset(last_request_time_ms, 0, sizeof(last_request_time_ms));
 }
 
 /*
@@ -86,7 +77,7 @@ AP_Terrain::AP_Terrain(AP_AHRS &_ahrs, const AP_Mission &_mission, const AP_Rall
  */
 bool AP_Terrain::height_amsl(const Location &loc, float &height, bool corrected)
 {
-    if (!enable || !allocate()) {
+    if (!allocate()) {
         return false;
     }
 
@@ -215,16 +206,11 @@ bool AP_Terrain::height_above_terrain(float &terrain_altitude, bool extrapolate)
     if (!height_terrain_difference_home(terrain_difference, extrapolate)) {
         return false;
     }
-    Location loc;
-    if (!ahrs.get_position(loc)) {
-        // we don't know where we are
-        return false;
-    }
-    float relative_home_altitude = loc.alt*0.01f;
-    if (!loc.flags.relative_alt) {
-        // loc.alt has home altitude added, remove it
-        relative_home_altitude -= ahrs.get_home().alt*0.01f;
-    }
+
+    float relative_home_altitude;
+    ahrs.get_relative_position_D_home(relative_home_altitude);
+    relative_home_altitude = -relative_home_altitude;
+
     terrain_altitude = relative_home_altitude - terrain_difference;
     return true;
 }
@@ -263,7 +249,7 @@ bool AP_Terrain::height_relative_home_equivalent(float terrain_altitude,
 */
 float AP_Terrain::lookahead(float bearing, float distance, float climb_ratio)
 {
-    if (!enable || !allocate() || grid_spacing <= 0) {
+    if (!allocate() || grid_spacing <= 0) {
         return 0;
     }
 
@@ -316,7 +302,7 @@ void AP_Terrain::update(void)
     // update the cached current location height
     Location loc;
     bool pos_valid = ahrs.get_position(loc);
-    bool terrain_valid = height_amsl(loc, height, false);
+    bool terrain_valid = pos_valid && height_amsl(loc, height, false);
     if (pos_valid && terrain_valid) {
         last_current_loc_height = height;
         have_current_loc_height = true;
@@ -329,7 +315,7 @@ void AP_Terrain::update(void)
     update_rally_data();
 
     // update capabilities and status
-    if (enable) {
+    if (allocate()) {
         hal.util->set_capabilities(MAV_PROTOCOL_CAPABILITY_TERRAIN);
         if (!pos_valid) {
             // we don't know where we are
@@ -352,7 +338,7 @@ void AP_Terrain::update(void)
  */
 void AP_Terrain::log_terrain_data(DataFlash_Class &dataflash)
 {
-    if (!enable) {
+    if (!allocate()) {
         return;
     }
     Location loc;
@@ -398,7 +384,7 @@ bool AP_Terrain::allocate(void)
     cache = (struct grid_cache *)calloc(TERRAIN_GRID_BLOCK_CACHE_SIZE, sizeof(cache[0]));
     if (cache == nullptr) {
         enable.set(0);
-        GCS_MAVLINK::send_statustext_all(MAV_SEVERITY_CRITICAL, "Terrain: Allocation failed");
+        gcs().send_text(MAV_SEVERITY_CRITICAL, "Terrain: Allocation failed");
         return false;
     }
     cache_size = TERRAIN_GRID_BLOCK_CACHE_SIZE;

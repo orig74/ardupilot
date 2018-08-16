@@ -98,8 +98,8 @@ AP_Compass_HMC5843::AP_Compass_HMC5843(Compass &compass, AP_HMC5843_BusDriver *b
                                        bool force_external, enum Rotation rotation)
     : AP_Compass_Backend(compass)
     , _bus(bus)
-    , _force_external(force_external)
     , _rotation(rotation)
+    , _force_external(force_external)
 {
 }
 
@@ -159,13 +159,15 @@ bool AP_Compass_HMC5843::init()
         return false;
     }
 
+    // high retries for init
+    _bus->set_retries(10);
+    
     if (!_bus->configure()) {
         hal.console->printf("HMC5843: Could not configure the bus\n");
         goto errout;
     }
 
     if (!_check_whoami()) {
-        hal.console->printf("HMC5843: not a HMC device\n");
         goto errout;
     }
 
@@ -185,6 +187,9 @@ bool AP_Compass_HMC5843::init()
 
     _initialised = true;
 
+    // lower retries for run
+    _bus->set_retries(3);
+    
     bus_sem->give();
 
     // perform an initial read
@@ -203,9 +208,9 @@ bool AP_Compass_HMC5843::init()
 
     // read from sensor at 75Hz
     _bus->register_periodic_callback(13333,
-                                     FUNCTOR_BIND_MEMBER(&AP_Compass_HMC5843::_timer, bool));
+                                     FUNCTOR_BIND_MEMBER(&AP_Compass_HMC5843::_timer, void));
 
-    hal.console->printf("HMC5843 found on bus 0x%x\n", _bus->get_bus_id());
+    hal.console->printf("HMC5843 found on bus 0x%x\n", (unsigned)_bus->get_bus_id());
     
     return true;
 
@@ -219,7 +224,7 @@ errout:
  *
  * bus semaphore has been taken already by HAL
  */
-bool AP_Compass_HMC5843::_timer()
+void AP_Compass_HMC5843::_timer()
 {
     bool result = _read_sample();
 
@@ -227,10 +232,8 @@ bool AP_Compass_HMC5843::_timer()
     _take_sample();
     
     if (!result) {
-        return true;
+        return;
     }
-
-    uint32_t tnow = AP_HAL::micros();    
 
     // the _mag_N values are in the range -2048 to 2047, so we can
     // accumulate up to 15 of them in an int16_t. Let's make it 14
@@ -250,26 +253,29 @@ bool AP_Compass_HMC5843::_timer()
     rotate_field(raw_field, _compass_instance);
     
     // publish raw_field (uncorrected point sample) for calibration use
-    publish_raw_field(raw_field, tnow, _compass_instance);
+    publish_raw_field(raw_field, _compass_instance);
     
     // correct raw_field for known errors
     correct_field(raw_field, _compass_instance);
     
-    if (_sem->take(0)) {
-        _mag_x_accum += raw_field.x;
-        _mag_y_accum += raw_field.y;
-        _mag_z_accum += raw_field.z;
-        _accum_count++;
-        if (_accum_count == 14) {
-            _mag_x_accum /= 2;
-            _mag_y_accum /= 2;
-            _mag_z_accum /= 2;
-            _accum_count = 7;
-        }
-        _sem->give();
+    if (!field_ok(raw_field)) {
+        return;
     }
-    
-    return true;
+
+    if (!_sem->take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+        return; 
+    }
+    _mag_x_accum += raw_field.x;
+    _mag_y_accum += raw_field.y;
+    _mag_z_accum += raw_field.z;
+    _accum_count++;
+    if (_accum_count == 14) {
+        _mag_x_accum /= 2;
+        _mag_y_accum /= 2;
+        _mag_z_accum /= 2;
+        _accum_count = 7;
+    }
+    _sem->give();
 }
 
 /*

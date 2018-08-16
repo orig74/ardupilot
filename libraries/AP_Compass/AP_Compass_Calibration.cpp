@@ -61,8 +61,14 @@ Compass::_start_calibration(uint8_t i, bool retry, float delay)
         // lot noisier
         _calibrator[i].set_tolerance(_calibration_threshold*2);
     }
+    if (_rotate_auto) {
+        enum Rotation r = _state[i].external?(enum Rotation)_state[i].orientation.get():ROTATION_NONE;
+        if (r != ROTATION_CUSTOM) {
+            _calibrator[i].set_orientation(r, _state[i].external, _rotate_auto>=2);
+        }
+    }
     _cal_saved[i] = false;
-    _calibrator[i].start(retry, delay);
+    _calibrator[i].start(retry, delay, get_offsets_max(), i);
 
     // disable compass learning both for calibration and after completion
     _learn.set_and_save(0);
@@ -147,6 +153,10 @@ Compass::_accept_calibration(uint8_t i)
         set_and_save_diagonals(i,diag);
         set_and_save_offdiagonals(i,offdiag);
 
+        if (_state[i].external && _rotate_auto >= 2) {
+            _state[i].orientation.set_and_save_ifchanged(cal.get_orientation());
+        }
+
         if (!is_calibrating()) {
             AP_Notify::events.compass_cal_saved = 1;
         }
@@ -215,8 +225,9 @@ void Compass::send_mag_cal_report(mavlink_channel_t chan)
         }
 
         uint8_t cal_status = _calibrator[compass_id].get_status();
-        if ((cal_status == COMPASS_CAL_SUCCESS ||
-            cal_status == COMPASS_CAL_FAILED)) {
+        if (cal_status == COMPASS_CAL_SUCCESS ||
+            cal_status == COMPASS_CAL_FAILED ||
+            cal_status == COMPASS_CAL_BAD_ORIENTATION) {
             float fitness = _calibrator[compass_id].get_fitness();
             Vector3f ofs, diag, offdiag;
             _calibrator[compass_id].get_calibration(ofs, diag, offdiag);
@@ -229,7 +240,10 @@ void Compass::send_mag_cal_report(mavlink_channel_t chan)
                 fitness,
                 ofs.x, ofs.y, ofs.z,
                 diag.x, diag.y, diag.z,
-                offdiag.x, offdiag.y, offdiag.z
+                offdiag.x, offdiag.y, offdiag.z,
+                _calibrator[compass_id].get_orientation_confidence(),
+                _calibrator[compass_id].get_original_orientation(),
+                _calibrator[compass_id].get_orientation()
             );
         }
     }
@@ -243,6 +257,7 @@ Compass::is_calibrating() const
             case COMPASS_CAL_NOT_STARTED:
             case COMPASS_CAL_SUCCESS:
             case COMPASS_CAL_FAILED:
+            case COMPASS_CAL_BAD_ORIENTATION:
                 break;
             default:
                 return true;
@@ -267,15 +282,15 @@ Compass::_get_cal_mask() const
 /*
   handle an incoming MAG_CAL command
  */
-uint8_t Compass::handle_mag_cal_command(const mavlink_command_long_t &packet)
+MAV_RESULT Compass::handle_mag_cal_command(const mavlink_command_long_t &packet)
 {
-    uint8_t result = MAV_RESULT_FAILED;
+    MAV_RESULT result = MAV_RESULT_FAILED;
 
     switch (packet.command) {
     case MAV_CMD_DO_START_MAG_CAL: {
         result = MAV_RESULT_ACCEPTED;
         if (hal.util->get_soft_armed()) {
-            hal.console->println("Disarm for compass calibration");
+            hal.console->printf("Disarm for compass calibration\n");
             result = MAV_RESULT_FAILED;
             break;
         }

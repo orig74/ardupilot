@@ -57,13 +57,23 @@ struct PACKED sample_regs {
 
 extern const AP_HAL::HAL &hal;
 
+AP_Compass_LSM9DS1::AP_Compass_LSM9DS1(Compass &compass,
+                                       AP_HAL::OwnPtr<AP_HAL::Device> dev,
+                                       enum Rotation rotation)
+    : AP_Compass_Backend(compass)
+    , _dev(std::move(dev))
+    , _rotation(rotation)
+{
+}
+
 AP_Compass_Backend *AP_Compass_LSM9DS1::probe(Compass &compass,
-                                              AP_HAL::OwnPtr<AP_HAL::Device> dev)
+                                              AP_HAL::OwnPtr<AP_HAL::Device> dev,
+                                              enum Rotation rotation)
 {
     if (!dev) {
         return nullptr;
     }
-    AP_Compass_LSM9DS1 *sensor = new AP_Compass_LSM9DS1(compass, std::move(dev));
+    AP_Compass_LSM9DS1 *sensor = new AP_Compass_LSM9DS1(compass, std::move(dev), rotation);
     if (!sensor || !sensor->init()) {
         delete sensor;
         return nullptr;
@@ -98,10 +108,12 @@ bool AP_Compass_LSM9DS1::init()
 
     _compass_instance = register_compass();
 
+    set_rotation(_compass_instance, _rotation);
+
     _dev->set_device_type(DEVTYPE_LSM9DS1);
     set_dev_id(_compass_instance, _dev->get_bus_id());
 
-    _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_Compass_LSM9DS1::_update, bool));
+    _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_Compass_LSM9DS1::_update, void));
 
     bus_sem->give();
 
@@ -114,35 +126,34 @@ errout:
 
 void AP_Compass_LSM9DS1::_dump_registers()
 {
-    hal.console->println("LSMDS1 registers");
+    hal.console->printf("LSMDS1 registers\n");
     for (uint8_t reg = LSM9DS1M_OFFSET_X_REG_L_M; reg <= LSM9DS1M_INT_THS_H_M; reg++) {
         uint8_t v = _register_read(reg);
         hal.console->printf("%02x:%02x ", (unsigned)reg, (unsigned)v);
         if ((reg - (LSM9DS1M_OFFSET_X_REG_L_M-1)) % 16 == 0) {
-            hal.console->println();
+            hal.console->printf("\n");
         }
     }
-    hal.console->println();
+    hal.console->printf("\n");
 }
 
-bool AP_Compass_LSM9DS1::_update(void)
+void AP_Compass_LSM9DS1::_update(void)
 {
     struct sample_regs regs;
     Vector3f raw_field;
-    uint32_t time_us = AP_HAL::micros();
 
     if (!_block_read(LSM9DS1M_STATUS_REG_M, (uint8_t *) &regs, sizeof(regs))) {
-        goto fail;
+        return;
     }
 
     if (regs.status & 0x80) {
-        goto fail;
+        return;
     }
 
     raw_field = Vector3f(regs.val[0], regs.val[1], regs.val[2]);
 
     if (is_zero(raw_field.x) && is_zero(raw_field.y) && is_zero(raw_field.z)) {
-        goto fail;
+        return;
     }
 
     raw_field *= _scaling;
@@ -151,12 +162,12 @@ bool AP_Compass_LSM9DS1::_update(void)
     rotate_field(raw_field, _compass_instance);
 
     // publish raw_field (uncorrected point sample) for calibration use
-    publish_raw_field(raw_field, time_us, _compass_instance);
+    publish_raw_field(raw_field, _compass_instance);
 
     // correct raw_field for known errors
     correct_field(raw_field, _compass_instance);
 
-    if (_sem->take(0)) {
+    if (_sem->take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
         _mag_x_accum += raw_field.x;
         _mag_y_accum += raw_field.y;
         _mag_z_accum += raw_field.z;
@@ -169,9 +180,6 @@ bool AP_Compass_LSM9DS1::_update(void)
         }
         _sem->give();
     }
-
-fail:
-    return true;
 }
 
 void AP_Compass_LSM9DS1::read()
@@ -191,10 +199,6 @@ void AP_Compass_LSM9DS1::read()
     _accum_count = 0;
 
     _sem->give();
-        
-#if CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_LINUX_NAVIO2
-    field.rotate(ROTATION_ROLL_180);
-#endif
 
     publish_filtered_field(field, _compass_instance);
 }
@@ -233,12 +237,6 @@ bool AP_Compass_LSM9DS1::_set_scale(void)
     _scaling = 0.58f;
 
     return true;
-}
-
-AP_Compass_LSM9DS1::AP_Compass_LSM9DS1(Compass &compass, AP_HAL::OwnPtr<AP_HAL::Device> dev)
-    : AP_Compass_Backend(compass)
-    , _dev(std::move(dev))
-{
 }
 
 uint8_t AP_Compass_LSM9DS1::_register_read(uint8_t reg)

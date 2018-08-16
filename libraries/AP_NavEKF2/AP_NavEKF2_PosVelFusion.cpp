@@ -6,6 +6,7 @@
 #include "AP_NavEKF2_core.h"
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Vehicle/AP_Vehicle.h>
+#include <AP_RangeFinder/RangeFinder_Backend.h>
 
 #include <stdio.h>
 
@@ -23,12 +24,33 @@ void NavEKF2_core::ResetVelocity(void)
     velResetNE.x = stateStruct.velocity.x;
     velResetNE.y = stateStruct.velocity.y;
 
+    // reset the corresponding covariances
+    zeroRows(P,3,4);
+    zeroCols(P,3,4);
+
     if (PV_AidingMode != AID_ABSOLUTE) {
         stateStruct.velocity.zero();
+        // set the variances using the measurement noise parameter
+        P[4][4] = P[3][3] = sq(frontend->_gpsHorizVelNoise);
     } else {
-        // reset horizontal velocity states to the GPS velocity
-        stateStruct.velocity.x  = gpsDataNew.vel.x; // north velocity from blended accel data
-        stateStruct.velocity.y  = gpsDataNew.vel.y; // east velocity from blended accel data
+        // reset horizontal velocity states to the GPS velocity if available
+        if (imuSampleTime_ms - lastTimeGpsReceived_ms < 250) {
+            stateStruct.velocity.x  = gpsDataNew.vel.x;
+            stateStruct.velocity.y  = gpsDataNew.vel.y;
+            // set the variances using the reported GPS speed accuracy
+            P[4][4] = P[3][3] = sq(MAX(frontend->_gpsHorizVelNoise,gpsSpdAccuracy));
+            // clear the timeout flags and counters
+            velTimeout = false;
+            lastVelPassTime_ms = imuSampleTime_ms;
+        } else {
+            stateStruct.velocity.x  = 0.0f;
+            stateStruct.velocity.y  = 0.0f;
+            // set the variances using the likely speed range
+            P[4][4] = P[3][3] = sq(25.0f);
+            // clear the timeout flags and counters
+            velTimeout = false;
+            lastVelPassTime_ms = imuSampleTime_ms;
+        }
     }
     for (uint8_t i=0; i<imu_buffer_length; i++) {
         storedOutput[i].velocity.x = stateStruct.velocity.x;
@@ -46,12 +68,6 @@ void NavEKF2_core::ResetVelocity(void)
     // store the time of the reset
     lastVelReset_ms = imuSampleTime_ms;
 
-    // reset the corresponding covariances
-    zeroRows(P,3,4);
-    zeroCols(P,3,4);
-
-    // set the variances to the measurement variance
-    P[4][4] = P[3][3] = sq(frontend->_gpsHorizVelNoise);
 
 }
 
@@ -62,14 +78,46 @@ void NavEKF2_core::ResetPosition(void)
     posResetNE.x = stateStruct.position.x;
     posResetNE.y = stateStruct.position.y;
 
+    // reset the corresponding covariances
+    zeroRows(P,6,7);
+    zeroCols(P,6,7);
+
     if (PV_AidingMode != AID_ABSOLUTE) {
         // reset all position state history to the last known position
         stateStruct.position.x = lastKnownPositionNE.x;
         stateStruct.position.y = lastKnownPositionNE.y;
+        // set the variances using the position measurement noise parameter
+        P[6][6] = P[7][7] = sq(frontend->_gpsHorizPosNoise);
     } else  {
-        // write to state vector and compensate for offset  between last GPs measurement and the EKF time horizon
-        stateStruct.position.x = gpsDataNew.pos.x  + 0.001f*gpsDataNew.vel.x*(float(imuDataDelayed.time_ms) - float(gpsDataNew.time_ms));
-        stateStruct.position.y = gpsDataNew.pos.y  + 0.001f*gpsDataNew.vel.y*(float(imuDataDelayed.time_ms) - float(gpsDataNew.time_ms));
+        // Use GPS data as first preference if fresh data is available
+        if (imuSampleTime_ms - lastTimeGpsReceived_ms < 250) {
+            // record the ID of the GPS for the data we are using for the reset
+            last_gps_idx = gpsDataNew.sensor_idx;
+            // write to state vector and compensate for offset  between last GPS measurement and the EKF time horizon
+            stateStruct.position.x = gpsDataNew.pos.x  + 0.001f*gpsDataNew.vel.x*(float(imuDataDelayed.time_ms) - float(gpsDataNew.time_ms));
+            stateStruct.position.y = gpsDataNew.pos.y  + 0.001f*gpsDataNew.vel.y*(float(imuDataDelayed.time_ms) - float(gpsDataNew.time_ms));
+            // set the variances using the position measurement noise parameter
+            P[6][6] = P[7][7] = sq(MAX(gpsPosAccuracy,frontend->_gpsHorizPosNoise));
+            // clear the timeout flags and counters
+            posTimeout = false;
+            lastPosPassTime_ms = imuSampleTime_ms;
+        } else if (imuSampleTime_ms - rngBcnLast3DmeasTime_ms < 250) {
+            // use the range beacon data as a second preference
+            stateStruct.position.x = receiverPos.x;
+            stateStruct.position.y = receiverPos.y;
+            // set the variances from the beacon alignment filter
+            P[6][6] = receiverPosCov[0][0];
+            P[7][7] = receiverPosCov[1][1];
+            // clear the timeout flags and counters
+            rngBcnTimeout = false;
+            lastRngBcnPassTime_ms = imuSampleTime_ms;
+        } else if (imuSampleTime_ms - extNavDataDelayed.time_ms < 250) {
+            // use the range beacon data as a second preference
+            stateStruct.position.x = extNavDataDelayed.pos.x;
+            stateStruct.position.y = extNavDataDelayed.pos.y;
+            // set the variances from the beacon alignment filter
+            P[7][7] = P[6][6] = sq(extNavDataDelayed.posErr);
+        }
     }
     for (uint8_t i=0; i<imu_buffer_length; i++) {
         storedOutput[i].position.x = stateStruct.position.x;
@@ -87,18 +135,14 @@ void NavEKF2_core::ResetPosition(void)
     // store the time of the reset
     lastPosReset_ms = imuSampleTime_ms;
 
-    // reset the corresponding covariances
-    zeroRows(P,6,7);
-    zeroCols(P,6,7);
-
-    // set the variances to the measurement variance
-    P[6][6] = P[7][7] = sq(frontend->_gpsHorizPosNoise);
-
 }
 
 // reset the vertical position state using the last height measurement
 void NavEKF2_core::ResetHeight(void)
 {
+    // Store the position before the reset so that we can record the reset delta
+    posResetD = stateStruct.position.z;
+
     // write to the state vector
     stateStruct.position.z = -hgtMea;
     outputDataNew.position.z = stateStruct.position.z;
@@ -116,6 +160,16 @@ void NavEKF2_core::ResetHeight(void)
         storedOutput[i].position.z = stateStruct.position.z;
     }
 
+    // Calculate the position jump due to the reset
+    posResetD = stateStruct.position.z - posResetD;
+
+    // store the time of the reset
+    lastPosResetD_ms = imuSampleTime_ms;
+
+    // clear the timeout flags and counters
+    hgtTimeout = false;
+    lastHgtPassTime_ms = imuSampleTime_ms;
+
     // reset the corresponding covariances
     zeroRows(P,8,8);
     zeroCols(P,8,8);
@@ -125,7 +179,7 @@ void NavEKF2_core::ResetHeight(void)
 
     // Reset the vertical velocity state using GPS vertical velocity if we are airborne
     // Check that GPS vertical velocity data is available and can be used
-    if (inFlight && !gpsNotAvailable && frontend->_fusionModeGPS == 0) {
+    if (inFlight && !gpsNotAvailable && frontend->_fusionModeGPS == 0 && !frontend->inhibitGpsVertVelUse) {
         stateStruct.velocity.z =  gpsDataNew.vel.z;
     } else if (onGround) {
         stateStruct.velocity.z = 0.0f;
@@ -150,18 +204,18 @@ void NavEKF2_core::ResetHeight(void)
 bool NavEKF2_core::resetHeightDatum(void)
 {
     if (activeHgtSource == HGT_SOURCE_RNG) {
-        // by definition the height dataum is at ground level so cannot perform the reset
+        // by definition the height datum is at ground level so cannot perform the reset
         return false;
     }
     // record the old height estimate
     float oldHgt = -stateStruct.position.z;
     // reset the barometer so that it reads zero at the current height
-    frontend->_baro.update_calibration();
+    AP::baro().update_calibration();
     // reset the height state
     stateStruct.position.z = 0.0f;
-    // adjust the height of the EKF origin so that the origin plus baro height before and afer the reset is the same
+    // adjust the height of the EKF origin so that the origin plus baro height before and after the reset is the same
     if (validOrigin) {
-        EKF_origin.alt += oldHgt*100;
+        ekfGpsRefHgt += (double)oldHgt;
     }
     // adjust the terrain state
     terrainState += oldHgt;
@@ -184,34 +238,79 @@ void NavEKF2_core::SelectVelPosFusion()
         posVelFusionDelayed = false;
     }
 
+    // Check for data at the fusion time horizon
+    extNavDataToFuse = storedExtNav.recall(extNavDataDelayed, imuDataDelayed.time_ms);
+
     // read GPS data from the sensor and check for new data in the buffer
     readGpsData();
     gpsDataToFuse = storedGPS.recall(gpsDataDelayed,imuDataDelayed.time_ms);
     // Determine if we need to fuse position and velocity data on this time step
     if (gpsDataToFuse && PV_AidingMode == AID_ABSOLUTE) {
-        // Don't fuse velocity data if GPS doesn't support it
+        // set fusion request flags
         if (frontend->_fusionModeGPS <= 1) {
             fuseVelData = true;
         } else {
             fuseVelData = false;
         }
         fusePosData = true;
+        extNavUsedForPos = false;
 
         // correct GPS data for position offset of antenna phase centre relative to the IMU
-        Vector3f posOffsetBody = _ahrs->get_gps().get_antenna_offset(gpsDataDelayed.sensor_idx) - accelPosOffset;
+        Vector3f posOffsetBody = AP::gps().get_antenna_offset(gpsDataDelayed.sensor_idx) - accelPosOffset;
         if (!posOffsetBody.is_zero()) {
+            // Don't fuse velocity data if GPS doesn't support it
             if (fuseVelData) {
                 // TODO use a filtered angular rate with a group delay that matches the GPS delay
                 Vector3f angRate = imuDataDelayed.delAng * (1.0f/imuDataDelayed.delAngDT);
                 Vector3f velOffsetBody = angRate % posOffsetBody;
                 Vector3f velOffsetEarth = prevTnb.mul_transpose(velOffsetBody);
-                gpsDataDelayed.vel -= velOffsetEarth;
+                gpsDataDelayed.vel.x -= velOffsetEarth.x;
+                gpsDataDelayed.vel.y -= velOffsetEarth.y;
+                gpsDataDelayed.vel.z -= velOffsetEarth.z;
             }
+
             Vector3f posOffsetEarth = prevTnb.mul_transpose(posOffsetBody);
             gpsDataDelayed.pos.x -= posOffsetEarth.x;
             gpsDataDelayed.pos.y -= posOffsetEarth.y;
             gpsDataDelayed.hgt += posOffsetEarth.z;
         }
+
+        // copy corrected GPS data to observation vector
+        if (fuseVelData) {
+            velPosObs[0] = gpsDataDelayed.vel.x;
+            velPosObs[1] = gpsDataDelayed.vel.y;
+            velPosObs[2] = gpsDataDelayed.vel.z;
+        }
+        velPosObs[3] = gpsDataDelayed.pos.x;
+        velPosObs[4] = gpsDataDelayed.pos.y;
+
+    } else if (extNavDataToFuse && PV_AidingMode == AID_ABSOLUTE) {
+        // This is a special case that uses and external nav system for position
+        extNavUsedForPos = true;
+        activeHgtSource = HGT_SOURCE_EV;
+        fuseVelData = false;
+        fuseHgtData = true;
+        fusePosData = true;
+        velPosObs[3] = extNavDataDelayed.pos.x;
+        velPosObs[4] = extNavDataDelayed.pos.y;
+        velPosObs[5] = extNavDataDelayed.pos.z;
+
+        // if compass is disabled, also use it for yaw
+        if (!use_compass()) {
+            extNavUsedForYaw = true;
+            if (!yawAlignComplete) {
+                extNavYawResetRequest = true;
+                magYawResetRequest = false;
+                gpsYawResetRequest = false;
+                controlMagYawReset();
+                finalInflightYawInit = true;
+            } else {
+                fuseEulerYaw();
+            }
+        } else {
+            extNavUsedForYaw = false;
+        }
+
     } else {
         fuseVelData = false;
         fusePosData = false;
@@ -223,16 +322,68 @@ void NavEKF2_core::SelectVelPosFusion()
     }
 
     // Select height data to be fused from the available baro, range finder and GPS sources
+
     selectHeightForFusion();
+
+    // if we are using GPS, check for a change in receiver and reset position and height
+    if (gpsDataToFuse && PV_AidingMode == AID_ABSOLUTE && gpsDataDelayed.sensor_idx != last_gps_idx) {
+        // record the ID of the GPS that we are using for the reset
+        last_gps_idx = gpsDataDelayed.sensor_idx;
+
+        // Store the position before the reset so that we can record the reset delta
+        posResetNE.x = stateStruct.position.x;
+        posResetNE.y = stateStruct.position.y;
+
+        // Set the position states to the position from the new GPS
+        stateStruct.position.x = gpsDataNew.pos.x;
+        stateStruct.position.y = gpsDataNew.pos.y;
+
+        // Calculate the position offset due to the reset
+        posResetNE.x = stateStruct.position.x - posResetNE.x;
+        posResetNE.y = stateStruct.position.y - posResetNE.y;
+
+        // Add the offset to the output observer states
+        for (uint8_t i=0; i<imu_buffer_length; i++) {
+            storedOutput[i].position.x += posResetNE.x;
+            storedOutput[i].position.y += posResetNE.y;
+        }
+        outputDataNew.position.x += posResetNE.x;
+        outputDataNew.position.y += posResetNE.y;
+        outputDataDelayed.position.x += posResetNE.x;
+        outputDataDelayed.position.y += posResetNE.y;
+
+        // store the time of the reset
+        lastPosReset_ms = imuSampleTime_ms;
+
+        // If we are alseo using GPS as the height reference, reset the height
+        if (activeHgtSource == HGT_SOURCE_GPS) {
+            // Store the position before the reset so that we can record the reset delta
+            posResetD = stateStruct.position.z;
+
+            // write to the state vector
+            stateStruct.position.z = -hgtMea;
+
+            // Calculate the position jump due to the reset
+            posResetD = stateStruct.position.z - posResetD;
+
+            // Add the offset to the output observer states
+            outputDataNew.position.z += posResetD;
+            outputDataDelayed.position.z += posResetD;
+            for (uint8_t i=0; i<imu_buffer_length; i++) {
+                storedOutput[i].position.z += posResetD;
+            }
+
+            // store the time of the reset
+            lastPosResetD_ms = imuSampleTime_ms;
+        }
+    }
 
     // If we are operating without any aiding, fuse in the last known position
     // to constrain tilt drift. This assumes a non-manoeuvring vehicle
     // Do this to coincide with the height fusion
     if (fuseHgtData && PV_AidingMode == AID_NONE) {
-        gpsDataDelayed.vel.zero();
-        gpsDataDelayed.pos.x = lastKnownPositionNE.x;
-        gpsDataDelayed.pos.y = lastKnownPositionNE.y;
-
+        velPosObs[3] = lastKnownPositionNE.x;
+        velPosObs[4] = lastKnownPositionNE.y;
         fusePosData = true;
         fuseVelData = false;
     }
@@ -269,7 +420,6 @@ void NavEKF2_core::FuseVelPosNED()
     // declare variables used by state and covariance update calculations
     Vector6 R_OBS; // Measurement variances used for fusion
     Vector6 R_OBS_DATA_CHECKS; // Measurement variances used for data checks only
-    Vector6 observation;
     float SK;
 
     // perform sequential fusion of GPS measurements. This assumes that the
@@ -279,18 +429,6 @@ void NavEKF2_core::FuseVelPosNED()
     // so we might as well take advantage of the computational efficiencies
     // associated with sequential fusion
     if (fuseVelData || fusePosData || fuseHgtData) {
-        // set the GPS data timeout depending on whether airspeed data is present
-        uint32_t gpsRetryTime;
-        if (useAirspeed()) gpsRetryTime = frontend->gpsRetryTimeUseTAS_ms;
-        else gpsRetryTime = frontend->gpsRetryTimeNoTAS_ms;
-
-        // form the observation vector
-        observation[0] = gpsDataDelayed.vel.x;
-        observation[1] = gpsDataDelayed.vel.y;
-        observation[2] = gpsDataDelayed.vel.z;
-        observation[3] = gpsDataDelayed.pos.x;
-        observation[4] = gpsDataDelayed.pos.y;
-        observation[5] = -hgtMea;
 
         // calculate additional error in GPS position caused by manoeuvring
         float posErr = frontend->gpsPosVarAccScale * accNavMag;
@@ -341,8 +479,8 @@ void NavEKF2_core::FuseVelPosNED()
         // the accelerometers and we should disable the GPS and barometer innovation consistency checks.
         if (useGpsVertVel && fuseVelData && (frontend->_altSource != 2)) {
             // calculate innovations for height and vertical GPS vel measurements
-            float hgtErr  = stateStruct.position.z - observation[5];
-            float velDErr = stateStruct.velocity.z - observation[2];
+            float hgtErr  = stateStruct.position.z - velPosObs[5];
+            float velDErr = stateStruct.velocity.z - velPosObs[2];
             // check if they are the same sign and both more than 3-sigma out of bounds
             if ((hgtErr*velDErr > 0.0f) && (sq(hgtErr) > 9.0f * (P[8][8] + R_OBS_DATA_CHECKS[5])) && (sq(velDErr) > 9.0f * (P[5][5] + R_OBS_DATA_CHECKS[2]))) {
                 badIMUdata = true;
@@ -355,16 +493,14 @@ void NavEKF2_core::FuseVelPosNED()
         // test position measurements
         if (fusePosData) {
             // test horizontal position measurements
-            innovVelPos[3] = stateStruct.position.x - observation[3];
-            innovVelPos[4] = stateStruct.position.y - observation[4];
+            innovVelPos[3] = stateStruct.position.x - velPosObs[3];
+            innovVelPos[4] = stateStruct.position.y - velPosObs[4];
             varInnovVelPos[3] = P[6][6] + R_OBS_DATA_CHECKS[3];
             varInnovVelPos[4] = P[7][7] + R_OBS_DATA_CHECKS[4];
             // apply an innovation consistency threshold test, but don't fail if bad IMU data
             float maxPosInnov2 = sq(MAX(0.01f * (float)frontend->_gpsPosInnovGate, 1.0f))*(varInnovVelPos[3] + varInnovVelPos[4]);
             posTestRatio = (sq(innovVelPos[3]) + sq(innovVelPos[4])) / maxPosInnov2;
             posHealth = ((posTestRatio < 1.0f) || badIMUdata);
-            // declare a timeout condition if we have been too long without data or not aiding
-            posTimeout = (((imuSampleTime_ms - lastPosPassTime_ms) > gpsRetryTime) || PV_AidingMode == AID_NONE);
             // use position data if healthy or timed out
             if (PV_AidingMode == AID_NONE) {
                 posHealth = true;
@@ -400,7 +536,7 @@ void NavEKF2_core::FuseVelPosNED()
             // test velocity measurements
             uint8_t imax = 2;
             // Don't fuse vertical velocity observations if inhibited by the user or if we are using synthetic data
-            if (frontend->_fusionModeGPS >= 1 || PV_AidingMode != AID_ABSOLUTE) {
+            if (frontend->_fusionModeGPS > 0 || PV_AidingMode != AID_ABSOLUTE || frontend->inhibitGpsVertVelUse) {
                 imax = 1;
             }
             float innovVelSumSq = 0; // sum of squares of velocity innovations
@@ -409,7 +545,7 @@ void NavEKF2_core::FuseVelPosNED()
                 // velocity states start at index 3
                 stateIndex   = i + 3;
                 // calculate innovations using blended and single IMU predicted states
-                velInnov[i]  = stateStruct.velocity[i] - observation[i]; // blended
+                velInnov[i]  = stateStruct.velocity[i] - velPosObs[i]; // blended
                 // calculate innovation variance
                 varInnovVelPos[i] = P[stateIndex][stateIndex] + R_OBS_DATA_CHECKS[i];
                 // sum the innovation and innovation variances
@@ -421,8 +557,6 @@ void NavEKF2_core::FuseVelPosNED()
             velTestRatio = innovVelSumSq / (varVelSum * sq(MAX(0.01f * (float)frontend->_gpsVelInnovGate, 1.0f)));
             // fail if the ratio is greater than 1
             velHealth = ((velTestRatio < 1.0f)  || badIMUdata);
-            // declare a timeout if we have not fused velocity data for too long or not aiding
-            velTimeout = (((imuSampleTime_ms - lastVelPassTime_ms) > gpsRetryTime) || PV_AidingMode == AID_NONE);
             // use velocity data if healthy, timed out, or in constant position mode
             if (velHealth || velTimeout) {
                 velHealth = true;
@@ -445,7 +579,7 @@ void NavEKF2_core::FuseVelPosNED()
         // test height measurements
         if (fuseHgtData) {
             // calculate height innovations
-            innovVelPos[5] = stateStruct.position.z - observation[5];
+            innovVelPos[5] = stateStruct.position.z - velPosObs[5];
             varInnovVelPos[5] = P[8][8] + R_OBS_DATA_CHECKS[5];
             // calculate the innovation consistency test ratio
             hgtTestRatio = sq(innovVelPos[5]) / (sq(MAX(0.01f * (float)frontend->_hgtInnovGate, 1.0f)) * varInnovVelPos[5]);
@@ -467,7 +601,6 @@ void NavEKF2_core::FuseVelPosNED()
                 // if timed out, reset the height
                 if (hgtTimeout) {
                     ResetHeight();
-                    hgtTimeout = false;
                 }
 
                 // If we have got this far then declare the height data as healthy and reset the timeout counter
@@ -502,18 +635,18 @@ void NavEKF2_core::FuseVelPosNED()
                 // adjust scaling on GPS measurement noise variances if not enough satellites
                 if (obsIndex <= 2)
                 {
-                    innovVelPos[obsIndex] = stateStruct.velocity[obsIndex] - observation[obsIndex];
+                    innovVelPos[obsIndex] = stateStruct.velocity[obsIndex] - velPosObs[obsIndex];
                     R_OBS[obsIndex] *= sq(gpsNoiseScaler);
                 }
                 else if (obsIndex == 3 || obsIndex == 4) {
-                    innovVelPos[obsIndex] = stateStruct.position[obsIndex-3] - observation[obsIndex];
+                    innovVelPos[obsIndex] = stateStruct.position[obsIndex-3] - velPosObs[obsIndex];
                     R_OBS[obsIndex] *= sq(gpsNoiseScaler);
                 } else if (obsIndex == 5) {
-                    innovVelPos[obsIndex] = stateStruct.position[obsIndex-3] - observation[obsIndex];
+                    innovVelPos[obsIndex] = stateStruct.position[obsIndex-3] - velPosObs[obsIndex];
                     const float gndMaxBaroErr = 4.0f;
                     const float gndBaroInnovFloor = -0.5f;
 
-                    if(getTouchdownExpected()) {
+                    if(getTouchdownExpected() && activeHgtSource == HGT_SOURCE_BARO) {
                         // when a touchdown is expected, floor the barometer innovation at gndBaroInnovFloor
                         // constrain the correction between 0 and gndBaroInnovFloor+gndMaxBaroErr
                         // this function looks like this:
@@ -652,10 +785,13 @@ void NavEKF2_core::selectHeightForFusion()
     // the corrected reading is the reading that would have been taken if the sensor was
     // co-located with the IMU
     if (rangeDataToFuse) {
-        Vector3f posOffsetBody = frontend->_rng.get_pos_offset(rangeDataDelayed.sensor_idx) - accelPosOffset;
-        if (!posOffsetBody.is_zero()) {
-            Vector3f posOffsetEarth = prevTnb.mul_transpose(posOffsetBody);
-            rangeDataDelayed.rng += posOffsetEarth.z / prevTnb.c.z;
+        AP_RangeFinder_Backend *sensor = frontend->_rng.get_backend(rangeDataDelayed.sensor_idx);
+        if (sensor != nullptr) {
+            Vector3f posOffsetBody = sensor->get_pos_offset() - accelPosOffset;
+            if (!posOffsetBody.is_zero()) {
+                Vector3f posOffsetEarth = prevTnb.mul_transpose(posOffsetBody);
+                rangeDataDelayed.rng += posOffsetEarth.z / prevTnb.c.z;
+            }
         }
     }
 
@@ -664,21 +800,26 @@ void NavEKF2_core::selectHeightForFusion()
     baroDataToFuse = storedBaro.recall(baroDataDelayed, imuDataDelayed.time_ms);
 
     // select height source
-    if (((frontend->_useRngSwHgt > 0) || (frontend->_altSource == 1)) && (imuSampleTime_ms - rngValidMeaTime_ms < 500)) {
+    if (extNavUsedForPos) {
+        // always use external vision as the hight source if using for position.
+        activeHgtSource = HGT_SOURCE_EV;
+    } else if (((frontend->_useRngSwHgt > 0) || (frontend->_altSource == 1)) && (imuSampleTime_ms - rngValidMeaTime_ms < 500)) {
         if (frontend->_altSource == 1) {
             // always use range finder
             activeHgtSource = HGT_SOURCE_RNG;
         } else {
             // determine if we are above or below the height switch region
-            float rangeMaxUse = 1e-4f * (float)frontend->_rng.max_distance_cm() * (float)frontend->_useRngSwHgt;
+            float rangeMaxUse = 1e-4f * (float)frontend->_rng.max_distance_cm_orient(ROTATION_PITCH_270) * (float)frontend->_useRngSwHgt;
             bool aboveUpperSwHgt = (terrainState - stateStruct.position.z) > rangeMaxUse;
             bool belowLowerSwHgt = (terrainState - stateStruct.position.z) < 0.7f * rangeMaxUse;
 
             // If the terrain height is consistent and we are moving slowly, then it can be
             // used as a height reference in combination with a range finder
+            // apply a hysteresis to the speed check to prevent rapid switching
             float horizSpeed = norm(stateStruct.velocity.x, stateStruct.velocity.y);
-            bool dontTrustTerrain = (horizSpeed > 2.0f) || !terrainHgtStable;
-            bool trustTerrain = (horizSpeed < 1.0f) && terrainHgtStable;
+            bool dontTrustTerrain = ((horizSpeed > frontend->_useRngSwSpd) && filterStatus.flags.horiz_vel) || !terrainHgtStable;
+            float trust_spd_trigger = MAX((frontend->_useRngSwSpd - 1.0f),(frontend->_useRngSwSpd * 0.5f));
+            bool trustTerrain = (horizSpeed < trust_spd_trigger) && terrainHgtStable;
 
             /*
              * Switch between range finder and primary height source using height above ground and speed thresholds with
@@ -699,14 +840,17 @@ void NavEKF2_core::selectHeightForFusion()
         }
     } else if ((frontend->_altSource == 2) && ((imuSampleTime_ms - lastTimeGpsReceived_ms) < 500) && validOrigin && gpsAccuracyGood) {
         activeHgtSource = HGT_SOURCE_GPS;
+    } else if ((frontend->_altSource == 3) && validOrigin && rngBcnGoodToAlign) {
+        activeHgtSource = HGT_SOURCE_BCN;
     } else {
         activeHgtSource = HGT_SOURCE_BARO;
     }
 
-    // Use Baro alt as a fallback if we lose range finder or GPS
+    // Use Baro alt as a fallback if we lose range finder, GPS or external nav
     bool lostRngHgt = ((activeHgtSource == HGT_SOURCE_RNG) && ((imuSampleTime_ms - rngValidMeaTime_ms) > 500));
     bool lostGpsHgt = ((activeHgtSource == HGT_SOURCE_GPS) && ((imuSampleTime_ms - lastTimeGpsReceived_ms) > 2000));
-    if (lostRngHgt || lostGpsHgt) {
+    bool lostExtNavHgt = ((activeHgtSource == HGT_SOURCE_EV) && ((imuSampleTime_ms - extNavMeasTime_ms) > 2000));
+    if (lostRngHgt || lostGpsHgt || lostExtNavHgt) {
         activeHgtSource = HGT_SOURCE_BARO;
     }
 
@@ -726,13 +870,21 @@ void NavEKF2_core::selectHeightForFusion()
         }
     }
 
-    // calculate offset to GPS height data that enables us to switch to GPS height during operation
-    if (gpsDataToFuse && (activeHgtSource != HGT_SOURCE_GPS)) {
-            calcFiltGpsHgtOffset();
+    // If we are not using GPS as the primary height sensor, correct EKF origin height so that
+    // combined local NED position height and origin height remains consistent with the GPS altitude
+    // This also enables the GPS height to be used as a backup height source
+    if (gpsDataToFuse &&
+            (((frontend->_originHgtMode & (1 << 0)) && (activeHgtSource == HGT_SOURCE_BARO)) ||
+            ((frontend->_originHgtMode & (1 << 1)) && (activeHgtSource == HGT_SOURCE_RNG)))
+            ) {
+        correctEkfOriginHeight();
     }
 
     // Select the height measurement source
-    if (rangeDataToFuse && (activeHgtSource == HGT_SOURCE_RNG)) {
+    if (extNavDataToFuse && (activeHgtSource == HGT_SOURCE_EV)) {
+        hgtMea = -extNavDataDelayed.pos.z;
+        posDownObsNoise = sq(constrain_float(extNavDataDelayed.posErr, 0.1f, 10.0f));
+    } else if (rangeDataToFuse && (activeHgtSource == HGT_SOURCE_RNG)) {
         // using range finder data
         // correct for tilt using a flat earth model
         if (prevTnb.c.z >= 0.7) {
@@ -742,6 +894,7 @@ void NavEKF2_core::selectHeightForFusion()
             hgtMea -= terrainState;
             // enable fusion
             fuseHgtData = true;
+            velPosObs[5] = -hgtMea;
             // set the observation noise
             posDownObsNoise = sq(constrain_float(frontend->_rngNoise, 0.1f, 10.0f));
             // add uncertainty created by terrain gradient and vehicle tilt
@@ -754,6 +907,7 @@ void NavEKF2_core::selectHeightForFusion()
         // using GPS data
         hgtMea = gpsDataDelayed.hgt;
         // enable fusion
+        velPosObs[5] = -hgtMea;
         fuseHgtData = true;
         // set the observation noise using receiver reported accuracy or the horizontal noise scaled for typical VDOP/HDOP ratio
         if (gpsHgtAccuracy > 0.0f) {
@@ -765,6 +919,7 @@ void NavEKF2_core::selectHeightForFusion()
         // using Baro data
         hgtMea = baroDataDelayed.hgt - baroHgtOffset;
         // enable fusion
+        velPosObs[5] = -hgtMea;
         fuseHgtData = true;
         // set the observation noise
         posDownObsNoise = sq(constrain_float(frontend->_baroAltNoise, 0.1f, 10.0f));

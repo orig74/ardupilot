@@ -21,7 +21,6 @@
 #include <AP_Math/AP_Math.h>
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AccelCal/AP_AccelCal.h>
-#include <AP_ADC/AP_ADC.h>
 #include <AP_Declination/AP_Declination.h>
 #include <Filter/Filter.h>
 #include <AP_Buffer/AP_Buffer.h>
@@ -35,9 +34,8 @@
 #include <AP_Compass/AP_Compass.h>
 #include <AP_Baro/AP_Baro.h>
 #include <AP_InertialSensor/AP_InertialSensor.h>
-#include <AP_InertialNav/AP_InertialNav.h>
-#include <AP_NavEKF/AP_NavEKF.h>
 #include <AP_NavEKF2/AP_NavEKF2.h>
+#include <AP_NavEKF3/AP_NavEKF3.h>
 #include <AP_Mission/AP_Mission.h>
 #include <AP_Rally/AP_Rally.h>
 #include <AP_BattMonitor/AP_BattMonitor.h>
@@ -54,6 +52,7 @@
 
 class ReplayVehicle {
 public:
+    ReplayVehicle() { unused = -1; }
     void setup();
     void load_parameters(void);
 
@@ -62,14 +61,14 @@ public:
     AP_GPS gps;
     Compass compass;
     AP_SerialManager serial_manager;
-    RangeFinder rng {serial_manager};
-    NavEKF EKF{&ahrs, barometer, rng};
-    NavEKF2 EKF2{&ahrs, barometer, rng};
-    AP_AHRS_NavEKF ahrs {ins, barometer, gps, rng, EKF, EKF2};
-    AP_InertialNav_NavEKF inertial_nav{ahrs};
+    RangeFinder rng{serial_manager, ROTATION_PITCH_270};
+    NavEKF2 EKF2{&ahrs, rng};
+    NavEKF3 EKF3{&ahrs, rng};
+    AP_AHRS_NavEKF ahrs{EKF2, EKF3};
     AP_Vehicle::FixedWing aparm;
     AP_Airspeed airspeed;
-    DataFlash_Class dataflash{"Replay v0.1"};
+    AP_Int32 unused; // logging is magic for Replay; this is unused
+    DataFlash_Class dataflash{unused};
 
 private:
     Parameters g;
@@ -92,6 +91,7 @@ public:
     void loop() override;
 
     void flush_dataflash(void);
+    void show_packet_counts();
 
     bool check_solution = false;
     const char *log_filename = NULL;
@@ -118,10 +118,8 @@ private:
     SITL::SITL sitl;
 #endif
 
-    LogReader logreader{_vehicle.ahrs, _vehicle.ins, _vehicle.barometer, _vehicle.compass, _vehicle.gps, _vehicle.airspeed, _vehicle.dataflash, nottypes};
+    LogReader logreader{_vehicle.ahrs, _vehicle.ins, _vehicle.compass, _vehicle.gps, _vehicle.airspeed, _vehicle.dataflash, nottypes};
 
-    FILE *plotf;
-    FILE *plotf2;
     FILE *ekf1f;
     FILE *ekf2f;
     FILE *ekf3f;
@@ -142,6 +140,7 @@ private:
     bool logmatch = false;
     uint32_t output_counter = 0;
     uint64_t last_timestamp = 0;
+    bool packet_counts = false;
 
     struct {
         float max_roll_error;

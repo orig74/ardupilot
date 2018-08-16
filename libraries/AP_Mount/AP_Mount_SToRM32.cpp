@@ -6,11 +6,7 @@ extern const AP_HAL::HAL& hal;
 
 AP_Mount_SToRM32::AP_Mount_SToRM32(AP_Mount &frontend, AP_Mount::mount_state &state, uint8_t instance) :
     AP_Mount_Backend(frontend, state, instance),
-    _initialised(false),
-    _sysid(0),
-    _compid(0),
-    _chan(MAVLINK_COMM_0),
-    _last_send(0)
+    _chan(MAVLINK_COMM_0)
 {}
 
 // update mount position - should be called periodically
@@ -61,7 +57,7 @@ void AP_Mount_SToRM32::update()
 
         // point mount to a GPS point given by the mission planner
         case MAV_MOUNT_MODE_GPS_POINT:
-            if(_frontend._ahrs.get_gps().status() >= AP_GPS::GPS_OK_FIX_2D) {
+            if(AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D) {
                 calc_angle_to_location(_state._roi_target, _angle_ef_target_rad, true, true);
                 resend_now = true;
             }

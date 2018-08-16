@@ -56,7 +56,7 @@ AP_HAL::AnalogSource* AnalogIn_ADS1115::channel(int16_t pin)
         }
     }
 
-    hal.console->println("Out of analog channels");
+    hal.console->printf("Out of analog channels\n");
     return nullptr;
 }
 
@@ -64,9 +64,7 @@ void AnalogIn_ADS1115::init()
 {
     _adc->init();
 
-    hal.scheduler->suspend_timer_procs();
     hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&AnalogIn_ADS1115::_update, void));
-    hal.scheduler->resume_timer_procs();
 }
 
 void AnalogIn_ADS1115::_update()

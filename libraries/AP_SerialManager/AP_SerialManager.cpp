@@ -25,7 +25,10 @@
 
 extern const AP_HAL::HAL& hal;
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V4
+#ifdef HAL_SERIAL5_PROTOCOL
+#define SERIAL5_PROTOCOL HAL_SERIAL5_PROTOCOL
+#define SERIAL5_BAUD HAL_SERIAL5_BAUD
+#elif defined(CONFIG_ARCH_BOARD_PX4FMU_V4)
 #define SERIAL5_PROTOCOL SerialProtocol_MAVLink
 #define SERIAL5_BAUD 921600
 #else
@@ -33,12 +36,16 @@ extern const AP_HAL::HAL& hal;
 #define SERIAL5_BAUD AP_SERIALMANAGER_MAVLINK_BAUD/1000
 #endif
 
+#ifndef HAL_SERIAL6_PROTOCOL
+#define SERIAL6_PROTOCOL SerialProtocol_None
+#define SERIAL6_BAUD AP_SERIALMANAGER_MAVLINK_BAUD/1000
+#endif
 
 const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Param: 0_BAUD
     // @DisplayName: Serial0 baud rate
     // @Description: The baud rate used on the USB console. The APM2 can support all baudrates up to 115, and also can support 500. The PX4 can support rates of up to 1500. If you setup a rate you cannot support on APM2 and then can't connect to your board you should load a firmware from a different vehicle type. That will reset all your parameters to defaults.
-    // @Values: 1:1200,2:2400,4:4800,9:9600,19:19200,38:38400,57:57600,111:111100,115:115200,500:500000,921:921600,1500:1500000
+    // @Values: 1:1200,2:2400,4:4800,9:9600,19:19200,38:38400,57:57600,111:111100,115:115200,460:460800,500:500000,921:921600,1500:1500000
     // @User: Standard
     AP_GROUPINFO("0_BAUD",  0, AP_SerialManager, state[0].baud, AP_SERIALMANAGER_CONSOLE_BAUD/1000),
 
@@ -47,13 +54,15 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Description: Control what protocol to use on the console. 
     // @Values: 1:MAVlink1, 2:MAVLink2
     // @User: Standard
-    AP_GROUPINFO("0_PROTOCOL",  11, AP_SerialManager, state[0].protocol, SerialProtocol_MAVLink),
+    // @RebootRequired: True
+    AP_GROUPINFO("0_PROTOCOL",  11, AP_SerialManager, state[0].protocol, SerialProtocol_MAVLink2),
     
     // @Param: 1_PROTOCOL
     // @DisplayName: Telem1 protocol selection
     // @Description: Control what protocol to use on the Telem1 port. Note that the Frsky options require external converter hardware. See the wiki for details.
-    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Lidar, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
     // @User: Standard
+    // @RebootRequired: True
     AP_GROUPINFO("1_PROTOCOL",  1, AP_SerialManager, state[1].protocol, SerialProtocol_MAVLink),
 
     // @Param: 1_BAUD
@@ -66,8 +75,9 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Param: 2_PROTOCOL
     // @DisplayName: Telemetry 2 protocol selection
     // @Description: Control what protocol to use on the Telem2 port. Note that the Frsky options require external converter hardware. See the wiki for details.
-    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Lidar, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
     // @User: Standard
+    // @RebootRequired: True
     AP_GROUPINFO("2_PROTOCOL",  3, AP_SerialManager, state[2].protocol, SerialProtocol_MAVLink),
 
     // @Param: 2_BAUD
@@ -80,8 +90,9 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Param: 3_PROTOCOL
     // @DisplayName: Serial 3 (GPS) protocol selection
     // @Description: Control what protocol Serial 3 (GPS) should be used for. Note that the Frsky options require external converter hardware. See the wiki for details.
-    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Lidar, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
     // @User: Standard
+    // @RebootRequired: True
     AP_GROUPINFO("3_PROTOCOL",  5, AP_SerialManager, state[3].protocol, SerialProtocol_GPS),
 
     // @Param: 3_BAUD
@@ -94,8 +105,9 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Param: 4_PROTOCOL
     // @DisplayName: Serial4 protocol selection
     // @Description: Control what protocol Serial4 port should be used for. Note that the Frsky options require external converter hardware. See the wiki for details.
-    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Lidar, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
     // @User: Standard
+    // @RebootRequired: True
     AP_GROUPINFO("4_PROTOCOL",  7, AP_SerialManager, state[4].protocol, SerialProtocol_GPS),
 
     // @Param: 4_BAUD
@@ -108,8 +120,9 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     // @Param: 5_PROTOCOL
     // @DisplayName: Serial5 protocol selection
     // @Description: Control what protocol Serial5 port should be used for. Note that the Frsky options require external converter hardware. See the wiki for details.
-    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Lidar, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
     // @User: Standard
+    // @RebootRequired: True
     AP_GROUPINFO("5_PROTOCOL",  9, AP_SerialManager, state[5].protocol, SERIAL5_PROTOCOL),
 
     // @Param: 5_BAUD
@@ -120,13 +133,32 @@ const AP_Param::GroupInfo AP_SerialManager::var_info[] = {
     AP_GROUPINFO("5_BAUD", 10, AP_SerialManager, state[5].baud, SERIAL5_BAUD),
 
     // index 11 used by 0_PROTOCOL
+        
+    // @Param: 6_PROTOCOL
+    // @DisplayName: Serial6 protocol selection
+    // @Description: Control what protocol Serial6 port should be used for. Note that the Frsky options require external converter hardware. See the wiki for details.
+    // @Values: -1:None, 1:MAVLink1, 2:MAVLink2, 3:Frsky D, 4:Frsky SPort, 5:GPS, 7:Alexmos Gimbal Serial, 8:SToRM32 Gimbal Serial, 9:Rangefinder, 10:FrSky SPort Passthrough (OpenTX), 11:Lidar360, 13:Beacon, 14:Volz servo out, 15:SBus servo out, 16:ESC Telemetry, 17:Devo Telemetry
+    // @User: Standard
+    // @RebootRequired: True
+    AP_GROUPINFO("6_PROTOCOL",  12, AP_SerialManager, state[6].protocol, SERIAL6_PROTOCOL),
+
+    // @Param: 6_BAUD
+    // @DisplayName: Serial 6 Baud Rate
+    // @Description: The baud rate used for Serial6. The APM2 can support all baudrates up to 115, and also can support 500. The PX4 can support rates of up to 1500. If you setup a rate you cannot support on APM2 and then can't connect to your board you should load a firmware from a different vehicle type. That will reset all your parameters to defaults.
+    // @Values: 1:1200,2:2400,4:4800,9:9600,19:19200,38:38400,57:57600,111:111100,115:115200,500:500000,921:921600,1500:1500000
+    // @User: Standard
+    AP_GROUPINFO("6_BAUD", 13, AP_SerialManager, state[6].baud, SERIAL6_BAUD),
     
     AP_GROUPEND
 };
 
+// singleton instance
+AP_SerialManager *AP_SerialManager::_instance;
+
 // Constructor
 AP_SerialManager::AP_SerialManager()
 {
+    _instance = this;
     // setup parameter defaults
     AP_Param::setup_object_defaults(this, var_info);
 }
@@ -141,6 +173,8 @@ void AP_SerialManager::init_console()
                          AP_SERIALMANAGER_CONSOLE_BUFSIZE_TX);
 }
 
+extern bool g_nsh_should_exit;
+
 // init - // init - initialise serial ports
 void AP_SerialManager::init()
 {
@@ -150,6 +184,7 @@ void AP_SerialManager::init()
     state[3].uart = hal.uartB;  // serial3, uartB, normally 1st GPS
     state[4].uart = hal.uartE;  // serial4, uartE, normally 2nd GPS
     state[5].uart = hal.uartF;  // serial5
+    state[6].uart = hal.uartG;  // serial6
 
     if (state[0].uart == nullptr) {
         init_console();
@@ -157,6 +192,14 @@ void AP_SerialManager::init()
     
     // initialise serial ports
     for (uint8_t i=1; i<SERIALMANAGER_NUM_PORTS; i++) {
+
+#ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
+        if (i == 5 && state[i].protocol != SerialProtocol_None) {
+            // tell nsh to exit to free up this uart
+            g_nsh_should_exit = true;
+        }
+#endif
+        
         if (state[i].uart != nullptr) {
             switch (state[i].protocol) {
                 case SerialProtocol_None:
@@ -199,15 +242,42 @@ void AP_SerialManager::init()
                                          AP_SERIALMANAGER_SToRM32_BUFSIZE_RX,
                                          AP_SERIALMANAGER_SToRM32_BUFSIZE_TX);
                     break;
+                case SerialProtocol_Aerotenna_uLanding:
+                    state[i].protocol.set_and_save(SerialProtocol_Rangefinder);
+                    break;
+                case SerialProtocol_Volz:
+                                    // Note baudrate is hardcoded to 115200
+                                    state[i].baud = AP_SERIALMANAGER_VOLZ_BAUD;   // update baud param in case user looks at it
+                                    state[i].uart->begin(map_baudrate(state[i].baud),
+                                    		AP_SERIALMANAGER_VOLZ_BUFSIZE_RX,
+											AP_SERIALMANAGER_VOLZ_BUFSIZE_TX);
+                                    state[i].uart->set_unbuffered_writes(true);
+                                    state[i].uart->set_flow_control(AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE);
+                                    break;
+                case SerialProtocol_Sbus1:
+                    state[i].baud = AP_SERIALMANAGER_SBUS1_BAUD / 1000;   // update baud param in case user looks at it
+                    state[i].uart->begin(map_baudrate(state[i].baud),
+                                         AP_SERIALMANAGER_SBUS1_BUFSIZE_RX,
+                                         AP_SERIALMANAGER_SBUS1_BUFSIZE_TX);
+                    state[i].uart->configure_parity(2);    // enable even parity
+                    state[i].uart->set_stop_bits(2);
+                    state[i].uart->set_unbuffered_writes(true);
+                    state[i].uart->set_flow_control(AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE);
+                    break;
+
+                case SerialProtocol_ESCTelemetry:
+                    // ESC telemetry protocol from BLHeli32 ESCs. Note that baudrate is hardcoded to 115200
+                    state[i].baud = 115200;
+                    state[i].uart->begin(map_baudrate(state[i].baud), 30, 30);
+                    state[i].uart->set_flow_control(AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE);
+                    break;
             }
         }
     }
 }
 
-// find_serial - searches available serial ports for the first instance that allows the given protocol
-//  instance should be zero if searching for the first instance, 1 for the second, etc
-//  returns uart on success, nullptr if a serial port cannot be found
-AP_HAL::UARTDriver *AP_SerialManager::find_serial(enum SerialProtocol protocol, uint8_t instance) const
+
+const AP_SerialManager::UARTState *AP_SerialManager::find_protocol_instance(enum SerialProtocol protocol, uint8_t instance) const
 {
     uint8_t found_instance = 0;
 
@@ -215,7 +285,7 @@ AP_HAL::UARTDriver *AP_SerialManager::find_serial(enum SerialProtocol protocol, 
     for(uint8_t i=0; i<SERIALMANAGER_NUM_PORTS; i++) {
         if (protocol_match(protocol, (enum SerialProtocol)state[i].protocol.get())) {
             if (found_instance == instance) {
-                return state[i].uart;
+                return &state[i];
             }
             found_instance++;
         }
@@ -225,25 +295,28 @@ AP_HAL::UARTDriver *AP_SerialManager::find_serial(enum SerialProtocol protocol, 
     return nullptr;
 }
 
+// find_serial - searches available serial ports for the first instance that allows the given protocol
+//  instance should be zero if searching for the first instance, 1 for the second, etc
+//  returns uart on success, nullptr if a serial port cannot be found
+AP_HAL::UARTDriver *AP_SerialManager::find_serial(enum SerialProtocol protocol, uint8_t instance) const
+{
+    const struct UARTState *_state = find_protocol_instance(protocol, instance);
+    if (_state == nullptr) {
+        return nullptr;
+    }
+    return _state->uart;
+}
+
 // find_baudrate - searches available serial ports for the first instance that allows the given protocol
 //  instance should be zero if searching for the first instance, 1 for the second, etc
 //  returns baudrate on success, 0 if a serial port cannot be found
 uint32_t AP_SerialManager::find_baudrate(enum SerialProtocol protocol, uint8_t instance) const
 {
-    uint8_t found_instance = 0;
-
-    // search for matching protocol
-    for(uint8_t i=0; i<SERIALMANAGER_NUM_PORTS; i++) {
-        if (protocol_match(protocol, (enum SerialProtocol)state[i].protocol.get())) {
-            if (found_instance == instance) {
-                return map_baudrate(state[i].baud);
-            }
-            found_instance++;
-        }
+    const struct UARTState *_state = find_protocol_instance(protocol, instance);
+    if (_state == nullptr) {
+        return 0;
     }
-
-    // if we got this far we did not find the uart
-    return 0;
+    return map_baudrate(_state->baud);
 }
 
 // get_mavlink_channel - provides the mavlink channel associated with a given protocol
@@ -288,24 +361,6 @@ void AP_SerialManager::set_blocking_writes_all(bool blocking)
     for (uint8_t i=0; i<SERIALMANAGER_NUM_PORTS; i++) {
         if (state[i].uart != nullptr) {
             state[i].uart->set_blocking_writes(blocking);
-        }
-    }
-}
-
-// set_console_baud - sets the console's baud rate to the rate specified by the protocol
-void AP_SerialManager::set_console_baud(enum SerialProtocol protocol, uint8_t instance) const
-{
-    uint8_t found_instance = 0;
-
-    // find baud rate of this protocol
-    for (uint8_t i=0; i<SERIALMANAGER_NUM_PORTS; i++) {
-        if (protocol_match(protocol, (enum SerialProtocol)state[i].protocol.get())) {
-            if (instance == found_instance) {
-                // set console's baud rate
-                state[0].uart->begin(map_baudrate(state[i].baud));
-                return;
-            }
-            found_instance++;
         }
     }
 }
@@ -368,4 +423,14 @@ bool AP_SerialManager::protocol_match(enum SerialProtocol protocol1, enum Serial
     }
 
     return false;
+}
+
+
+namespace AP {
+
+AP_SerialManager &serialmanager()
+{
+    return *AP_SerialManager::get_instance();
+}
+
 }

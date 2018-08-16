@@ -17,37 +17,46 @@
 */
 
 #pragma once
-
-#include "SIM_Aircraft.h"
+#include "stdint.h"
+#include <AP_Param/AP_Param.h>
+#include "SITL_Input.h"
 
 namespace SITL {
 
 class Gripper_Servo {
 public:
-    const uint8_t gripper_servo;
-
-    Gripper_Servo(const uint8_t _gripper_servo) :
-        gripper_servo(_gripper_servo)
-    {}
+    Gripper_Servo() {
+        AP_Param::setup_object_defaults(this, var_info);
+    };
 
     // update Gripper state
-    void update(const struct Aircraft::sitl_input &input);
+    void update(const struct sitl_input &input);
+
+    float payload_mass() const; // kg
+
+    void set_alt(float alt) {altitude = alt;};
+    static const struct AP_Param::GroupInfo var_info[];
+    bool is_enabled() const {return static_cast<bool>(gripper_enable);}
 
 private:
-
+    AP_Int8  gripper_enable;  // enable gripper sim
+    AP_Int8  gripper_servo_pin;
     const uint32_t report_interval = 1000000; // microseconds
     uint64_t last_report_us;
 
     const float gap = 30; // mm
-
+    float altitude;
     float position; // percentage
-    float position_slew_rate = 20; // percentage
+    float position_slew_rate = 35; // percentage
     float reported_position = -1; // unlikely
 
     uint64_t last_update_us;
 
     bool should_report();
-    bool zero_report_done = false;
+
+    // dangle load from a string:
+    const float string_length = 2.0f; // metres
+    float load_mass = 0.0f; // kilograms
 };
 
 }

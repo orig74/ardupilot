@@ -42,14 +42,21 @@ class AP_RangeFinder_LeddarOne : public AP_RangeFinder_Backend
 
 public:
     // constructor
-    AP_RangeFinder_LeddarOne(RangeFinder &ranger, uint8_t instance, RangeFinder::RangeFinder_State &_state,
-                                   AP_SerialManager &serial_manager);
+    AP_RangeFinder_LeddarOne(RangeFinder::RangeFinder_State &_state,
+                             AP_SerialManager &serial_manager,
+                             uint8_t serial_instance);
 
     // static detection function
-    static bool detect(RangeFinder &ranger, uint8_t instance, AP_SerialManager &serial_manager);
+    static bool detect(AP_SerialManager &serial_manager, uint8_t serial_instance);
 
     // update state
     void update(void);
+
+protected:
+
+    virtual MAV_DISTANCE_SENSOR _get_mav_distance_sensor_type() const override {
+        return MAV_DISTANCE_SENSOR_LASER;
+    }
 
 private:
     // get a reading
@@ -58,15 +65,13 @@ private:
     // CRC16
     bool CRC16(uint8_t *aBuffer, uint8_t aLength, bool aCheck);
 
-    // send a request message to execute ModBus function
-    LeddarOne_Status send_request(void);
-
     // parse a response message from ModBus
     LeddarOne_Status parse_response(uint8_t &number_detections);
 
     AP_HAL::UARTDriver *uart = nullptr;
     uint32_t last_reading_ms;
     uint32_t last_sending_request_ms;
+    uint32_t last_available_ms;
 
     uint16_t detections[LEDDARONE_DETECTIONS_MAX];
     uint32_t sum_distance;
@@ -74,4 +79,17 @@ private:
     LeddarOne_ModbusStatus modbus_status = LEDDARONE_MODBUS_STATE_INIT;
     uint8_t read_buffer[LEDDARONE_READ_BUFFER_SIZE];
     uint32_t read_len;
+
+    // Modbus send request buffer
+    // read input register (function code 0x04)
+    const uint8_t send_request_buffer[8] = {
+        LEDDARONE_DEFAULT_ADDRESS,
+        LEDDARONE_MODOBUS_FUNCTION_CODE,
+        0,
+        LEDDARONE_MODOBUS_FUNCTION_REGISTER_ADDRESS,   // 20: Address of first register to read
+        0,
+        LEDDARONE_MODOBUS_FUNCTION_READ_NUMBER,        // 10: The number of consecutive registers to read
+        0x30,   // CRC Lo
+        0x09    // CRC Hi
+    };
 };

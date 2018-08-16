@@ -16,7 +16,7 @@
 #pragma once
 
 #include <AP_Gripper/AP_Gripper_Backend.h>
-#include <RC_Channel/RC_Channel.h>
+#include <SRV_Channel/SRV_Channel.h>
 
 class AP_Gripper_Servo : public AP_Gripper_Backend {
 public:
@@ -30,6 +30,15 @@ public:
     // release - move the servo output to the release position
     void release() override;
 
+    // grabbed - returns true if gripper in grabbed state
+    bool grabbed() const override;
+
+    // released - returns true if gripper in released state
+    bool released() const override;
+
+    // valid - returns true if the backend should be working
+    bool valid() const;
+
 protected:
 
     // type-specific intiailisations:
@@ -37,4 +46,11 @@ protected:
 
     // type-specific periodic updates:
     void update_gripper() override;
+
+private:
+
+    uint32_t action_timestamp; // ms; time grab or release happened
+    const uint16_t action_time = 3000; // ms; time to grab or release
+
+    bool has_state_pwm(const uint16_t pwm) const;
 };

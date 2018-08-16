@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "AP_HAL_Linux.h"
 
 #define LINUX_RC_INPUT_NUM_CHANNELS 16
@@ -17,13 +19,14 @@ public:
     virtual void init();
     bool new_input();
     uint8_t num_channels();
+    void set_num_channels(uint8_t num);
     uint16_t read(uint8_t ch);
     uint8_t read(uint16_t* periods, uint8_t len);
 
-    bool set_overrides(int16_t *overrides, uint8_t len);
-    bool set_override(uint8_t channel, int16_t override);
-    void clear_overrides();
-
+    int16_t get_rssi(void) override {
+        return _rssi;
+    }
+    
     // default empty _timer_tick, this is overridden by board
     // specific implementations
     virtual void _timer_tick() {}
@@ -42,12 +45,13 @@ public:
 
     // add some srxl input bytes, for RCInput over a serial port
     bool add_srxl_input(const uint8_t *bytes, size_t nbytes);
-    
+
 protected:
     void _process_rc_pulse(uint16_t width_s0, uint16_t width_s1);
     void _update_periods(uint16_t *periods, uint8_t len);
 
-    volatile bool new_rc_input;
+    std::atomic<unsigned int> rc_input_count;
+    std::atomic<unsigned int> last_rc_input_count;
 
     uint16_t _pwm_values[LINUX_RC_INPUT_NUM_CHANNELS];
     uint8_t  _num_channels;
@@ -55,9 +59,7 @@ protected:
     void _process_ppmsum_pulse(uint16_t width);
     void _process_sbus_pulse(uint16_t width_s0, uint16_t width_s1);
     void _process_dsm_pulse(uint16_t width_s0, uint16_t width_s1);
-
-    /* override state */
-    uint16_t _override[LINUX_RC_INPUT_NUM_CHANNELS];
+    void _process_pwm_pulse(uint16_t channel, uint16_t width_s0, uint16_t width_s1);
 
     // state of ppm decoder
     struct {
@@ -90,6 +92,8 @@ protected:
         uint8_t partial_frame_count;
         uint32_t last_input_ms;
     } sbus;
+
+    int16_t _rssi = -1;
 };
 
 }

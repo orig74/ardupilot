@@ -39,7 +39,7 @@ Gimbal::Gimbal(const struct sitl_fdm &_fdm) :
     mav_socket(false)
 {
     memset(&mavlink, 0, sizeof(mavlink));
-    dcm.from_euler(radians(fdm.rollDeg), radians(fdm.pitchDeg), radians(fdm.yawDeg));
+    fdm.quaternion.rotation_matrix(dcm);
 }
 
 
@@ -55,12 +55,10 @@ void Gimbal::update(void)
     last_update_us = now_us;
 
     Matrix3f vehicle_dcm;
-    vehicle_dcm.from_euler(radians(fdm.rollDeg), radians(fdm.pitchDeg), radians(fdm.yawDeg));
+    fdm.quaternion.rotation_matrix(vehicle_dcm);
 
-    Vector3f vehicle_gyro = Vector3f(radians(fdm.rollRate),
-                                     radians(fdm.pitchRate),
-                                     radians(fdm.yawRate));
-    Vector3f vehicle_accel_body = Vector3f(fdm.xAccel, fdm.yAccel, fdm.zAccel);
+    const Vector3f &vehicle_gyro = AP::ins().get_gyro();
+    const Vector3f &vehicle_accel_body = AP::ins().get_accel();
 
     // take a copy of the demanded rates to bypass the limiter function for testing
     Vector3f demRateRaw = demanded_angular_rate;
@@ -181,6 +179,11 @@ void Gimbal::update(void)
 */
 void Gimbal::send_report(void)
 {
+    if (AP_HAL::millis() < 10000) {
+        // simulated aircraft don't appear until 10s after startup. This avoids a windows
+        // threading issue with non-blocking sockets and the initial wait on uartA
+        return;
+    }
     if (!mavlink.connected && mav_socket.connect(target_address, target_port)) {
         ::printf("Gimbal connected to %s:%u\n", target_address, (unsigned)target_port);
         mavlink.connected = true;

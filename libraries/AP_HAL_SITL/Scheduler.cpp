@@ -1,11 +1,9 @@
 #include <AP_HAL/AP_HAL.h>
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 
 #include "AP_HAL_SITL.h"
 #include "Scheduler.h"
 #include "UARTDriver.h"
 #include <sys/time.h>
-#include <unistd.h>
 #include <fenv.h>
 
 using namespace HALSITL;
@@ -14,8 +12,6 @@ extern const AP_HAL::HAL& hal;
 
 
 AP_HAL::Proc Scheduler::_failsafe = nullptr;
-volatile bool Scheduler::_timer_suspended = false;
-volatile bool Scheduler::_timer_event_missed = false;
 
 AP_HAL::MemberProc Scheduler::_timer_proc[SITL_SCHEDULER_MAX_TIMER_PROCS] = {nullptr};
 uint8_t Scheduler::_num_timer_procs = 0;
@@ -24,6 +20,7 @@ bool Scheduler::_in_timer_proc = false;
 AP_HAL::MemberProc Scheduler::_io_proc[SITL_SCHEDULER_MAX_TIMER_PROCS] = {nullptr};
 uint8_t Scheduler::_num_io_procs = 0;
 bool Scheduler::_in_io_proc = false;
+bool Scheduler::_should_reboot = false;
 
 Scheduler::Scheduler(SITL_State *sitlState) :
     _sitlState(sitlState),
@@ -33,39 +30,42 @@ Scheduler::Scheduler(SITL_State *sitlState) :
 
 void Scheduler::init()
 {
+    _main_ctx = pthread_self();
+}
+
+bool Scheduler::in_main_thread() const
+{
+    if (!_in_timer_proc && !_in_io_proc && pthread_self() == _main_ctx) {
+        return true;
+    }
+    return false;
 }
 
 void Scheduler::delay_microseconds(uint16_t usec)
 {
     uint64_t start = AP_HAL::micros64();
-    uint64_t dtime;
-    while ((dtime=(AP_HAL::micros64() - start) < usec)) {
-        if (_stopped_clock_usec) {
-            _sitlState->wait_clock(start+usec);
-        } else {
-            usleep(usec - dtime);
+    do {
+        uint64_t dtime = AP_HAL::micros64() - start;
+        if (dtime >= usec) {
+            break;
         }
-    }
+        _sitlState->wait_clock(start + usec);
+    } while (true);
 }
 
 void Scheduler::delay(uint16_t ms)
 {
-    while (ms > 0) {
+    uint32_t start = AP_HAL::millis();
+    uint32_t now = start;
+    do {
         delay_microseconds(1000);
-        ms--;
-        if (_min_delay_cb_ms <= ms) {
-            if (_delay_cb) {
-                _delay_cb();
+        if (_min_delay_cb_ms <= (ms - (now - start))) {
+            if (in_main_thread()) {
+                call_delay_cb();
             }
         }
-    }
-}
-
-void Scheduler::register_delay_callback(AP_HAL::Proc proc,
-        uint16_t min_time_ms)
-{
-    _delay_cb = proc;
-    _min_delay_cb_ms = min_time_ms;
+        now = AP_HAL::millis();
+    } while (now - start < ms);
 }
 
 void Scheduler::register_timer_process(AP_HAL::MemberProc proc)
@@ -80,7 +80,6 @@ void Scheduler::register_timer_process(AP_HAL::MemberProc proc)
         _timer_proc[_num_timer_procs] = proc;
         _num_timer_procs++;
     }
-
 }
 
 void Scheduler::register_io_process(AP_HAL::MemberProc proc)
@@ -95,28 +94,11 @@ void Scheduler::register_io_process(AP_HAL::MemberProc proc)
         _io_proc[_num_io_procs] = proc;
         _num_io_procs++;
     }
-
 }
 
 void Scheduler::register_timer_failsafe(AP_HAL::Proc failsafe, uint32_t period_us)
 {
     _failsafe = failsafe;
-}
-
-void Scheduler::suspend_timer_procs() {
-    _timer_suspended = true;
-}
-
-void Scheduler::resume_timer_procs() {
-    _timer_suspended = false;
-    if (_timer_event_missed) {
-        _timer_event_missed = false;
-        _run_timer_procs(false);
-    }
-}
-
-bool Scheduler::in_timerprocess() {
-    return _in_timer_proc || _in_io_proc;
 }
 
 void Scheduler::system_initialized() {
@@ -138,18 +120,19 @@ void Scheduler::system_initialized() {
 }
 
 void Scheduler::sitl_end_atomic() {
-    if (_nested_atomic_ctr == 0)
-        hal.uartA->println("NESTED ATOMIC ERROR");
-    else
+    if (_nested_atomic_ctr == 0) {
+        hal.uartA->printf("NESTED ATOMIC ERROR\n");
+    } else {
         _nested_atomic_ctr--;
+    }
 }
 
 void Scheduler::reboot(bool hold_in_bootloader)
 {
-    hal.uartA->println("REBOOT NOT IMPLEMENTED\r\n");
+    _should_reboot = true;
 }
 
-void Scheduler::_run_timer_procs(bool called_from_isr)
+void Scheduler::_run_timer_procs()
 {
     if (_in_timer_proc) {
         // the timer calls took longer than the period of the
@@ -169,15 +152,11 @@ void Scheduler::_run_timer_procs(bool called_from_isr)
     }
     _in_timer_proc = true;
 
-    if (!_timer_suspended) {
-        // now call the timer based drivers
-        for (int i = 0; i < _num_timer_procs; i++) {
-            if (_timer_proc[i]) {
-                _timer_proc[i]();
-            }
+    // now call the timer based drivers
+    for (int i = 0; i < _num_timer_procs; i++) {
+        if (_timer_proc[i]) {
+            _timer_proc[i]();
         }
-    } else if (called_from_isr) {
-        _timer_event_missed = true;
     }
 
     // and the failsafe, if one is setup
@@ -188,31 +167,29 @@ void Scheduler::_run_timer_procs(bool called_from_isr)
     _in_timer_proc = false;
 }
 
-void Scheduler::_run_io_procs(bool called_from_isr)
+void Scheduler::_run_io_procs()
 {
     if (_in_io_proc) {
         return;
     }
     _in_io_proc = true;
 
-    if (!_timer_suspended) {
-        // now call the IO based drivers
-        for (int i = 0; i < _num_io_procs; i++) {
-            if (_io_proc[i]) {
-                _io_proc[i]();
-            }
+    // now call the IO based drivers
+    for (int i = 0; i < _num_io_procs; i++) {
+        if (_io_proc[i]) {
+            _io_proc[i]();
         }
-    } else if (called_from_isr) {
-        _timer_event_missed = true;
     }
 
     _in_io_proc = false;
 
-    UARTDriver::from(hal.uartA)->_timer_tick();
-    UARTDriver::from(hal.uartB)->_timer_tick();
-    UARTDriver::from(hal.uartC)->_timer_tick();
-    UARTDriver::from(hal.uartD)->_timer_tick();
-    UARTDriver::from(hal.uartE)->_timer_tick();
+    hal.uartA->_timer_tick();
+    hal.uartB->_timer_tick();
+    hal.uartC->_timer_tick();
+    hal.uartD->_timer_tick();
+    hal.uartE->_timer_tick();
+    hal.uartF->_timer_tick();
+    hal.uartG->_timer_tick();
 }
 
 /*
@@ -221,7 +198,40 @@ void Scheduler::_run_io_procs(bool called_from_isr)
 void Scheduler::stop_clock(uint64_t time_usec)
 {
     _stopped_clock_usec = time_usec;
-    _run_io_procs(false);
+    if (time_usec - _last_io_run > 10000) {
+        _last_io_run = time_usec;
+        _run_io_procs();
+    }
 }
 
-#endif
+/*
+  trampoline for thread create
+*/
+void *Scheduler::thread_create_trampoline(void *ctx)
+{
+    AP_HAL::MemberProc *t = (AP_HAL::MemberProc *)ctx;
+    (*t)();
+    free(t);
+    return nullptr;
+}
+
+
+/*
+  create a new thread
+*/
+bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char *name, uint32_t stack_size, priority_base base, int8_t priority)
+{
+    // take a copy of the MemberProc, it is freed after thread exits
+    AP_HAL::MemberProc *tproc = (AP_HAL::MemberProc *)malloc(sizeof(proc));
+    if (!tproc) {
+        return false;
+    }
+    *tproc = proc;
+    pthread_t thread {};
+    if (pthread_create(&thread, NULL, thread_create_trampoline, tproc) != 0) {
+        free(tproc);
+        return false;
+    }
+    return true;
+}
+

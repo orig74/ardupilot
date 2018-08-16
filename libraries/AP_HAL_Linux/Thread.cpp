@@ -40,6 +40,10 @@ void *Thread::_run_trampoline(void *arg)
     thread->_poison_stack();
     thread->_run();
 
+    if (thread->_auto_free) {
+        delete thread;
+    }
+
     return nullptr;
 }
 
@@ -172,7 +176,7 @@ bool Thread::start(const char *name, int policy, int prio)
     if (geteuid() == 0) {
         if ((r = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED)) != 0 ||
             (r = pthread_attr_setschedpolicy(&attr, policy)) != 0 ||
-            (r = pthread_attr_setschedparam(&attr, &param) != 0)) {
+            (r = pthread_attr_setschedparam(&attr, &param)) != 0) {
             AP_HAL::panic("Failed to set attributes for thread '%s': %s",
                           name, strerror(r));
         }

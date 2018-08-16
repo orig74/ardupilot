@@ -17,6 +17,7 @@
 #pragma once
 
 #include <inttypes.h>
+#include <vector>
 
 #include "AP_HAL_Namespace.h"
 #include "Device.h"
@@ -29,15 +30,6 @@ public:
     I2CDevice() : Device(BUS_TYPE_I2C) { }
 
     virtual ~I2CDevice() { }
-
-    /*
-     * Change device address. Note that this is the 7 bit address, it
-     * does not include the bit for read/write.
-     */
-    virtual void set_address(uint8_t address) = 0;
-
-    /* set number of retries on transfers */
-    virtual void set_retries(uint8_t retries) = 0;
 
     /* Device implementation */
 
@@ -65,12 +57,60 @@ public:
     /* See Device::adjust_periodic_callback() */
     virtual bool adjust_periodic_callback(
         Device::PeriodicHandle h, uint32_t period_usec) override = 0;
+
+    /*
+     * Force I2C transfers to be split between send and receive parts, with a
+     * stop condition between them. Setting this allows to conveniently
+     * continue using the read_* and transfer() methods on those devices.
+     *
+     * Some platforms may have transfers always split, in which case
+     * this method is not needed.
+     */
+    virtual void set_split_transfers(bool set) {};
 };
 
 class I2CDeviceManager {
 public:
     /* Get a device handle */
-    virtual OwnPtr<AP_HAL::I2CDevice> get_device(uint8_t bus, uint8_t address) = 0;
+    virtual OwnPtr<AP_HAL::I2CDevice> get_device(uint8_t bus, uint8_t address,
+                                                 uint32_t bus_clock=400000,
+                                                 bool use_smbus = false,
+                                                 uint32_t timeout_ms=4) = 0;
+    /*
+     * Get device by looking up the I2C bus on the buses from @devpaths.
+     *
+     * Each string in @devpaths are possible locations for the bus. How the
+     * strings are implemented are HAL-specific. On Linux this is the info
+     * returned by 'udevadm info -q path /dev/i2c-X'. The first I2C bus
+     * matching a prefix in @devpaths is used to create a I2CDevice object.
+     */
+    virtual OwnPtr<I2CDevice> get_device(std::vector<const char *> devpaths,
+                                         uint8_t address) {
+        // Not implemented
+        return nullptr;
+    }
+
+    /*
+      get mask of bus numbers for all configured I2C buses
+     */
+    virtual uint32_t get_bus_mask(void) const { return 0x0F; }
+
+    /*
+      get mask of bus numbers for all configured external I2C buses
+     */
+    virtual uint32_t get_bus_mask_external(void) const { return 0x0F; }
+
+    /*
+      get mask of bus numbers for all configured internal I2C buses
+     */
+    virtual uint32_t get_bus_mask_internal(void) const { return 0x01; }
 };
 
+/*
+  convenient macros for iterating over I2C bus numbers
+ */
+#define FOREACH_I2C_EXTERNAL(i) for (uint32_t _bmask=hal.i2c_mgr->get_bus_mask_external(), i=0; i<32; i++) if ((1U<<i)&_bmask)
+#define FOREACH_I2C_INTERNAL(i) for (uint32_t _bmask=hal.i2c_mgr->get_bus_mask_internal(), i=0; i<32; i++) if ((1U<<i)&_bmask)
+#define FOREACH_I2C(i) for (uint32_t _bmask=hal.i2c_mgr->get_bus_mask(), i=0; i<32; i++) if ((1U<<i)&_bmask)
+    
 }

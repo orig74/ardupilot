@@ -7,7 +7,7 @@
 #pragma once
 
 #include <AP_HAL/utility/Socket.h>
-
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 #include "IRLock.h"
 
 class AP_IRLock_SITL : public IRLock
@@ -16,10 +16,10 @@ public:
     AP_IRLock_SITL();
 
     // init - initialize sensor library
-    virtual void init();
+    void init(int8_t bus) override;
 
     // retrieve latest sensor data - returns true if new data is available
-    virtual bool update();
+    bool update() override;
 
 private:
 
@@ -27,14 +27,15 @@ private:
       reply packet sent from simulator to ArduPilot
      */
     struct irlock_packet {
-            uint64_t timestamp;
-            uint16_t num_targets;
-            float pos_x;
-            float pos_y;
-            float size_x;
-            float size_y;
-          };
+        uint64_t timestamp;  // in miliseconds
+        uint16_t num_targets;
+        float pos_x;
+        float pos_y;
+        float size_x;
+        float size_y;
+    };
 
-    uint64_t _last_timestamp;
+    uint32_t _last_timestamp;
     SocketAPM sock;
 };
+#endif // CONFIG_HAL_BOARD

@@ -1,5 +1,9 @@
+#include <AP_BoardConfig/AP_BoardConfig.h>
 #include "OpticalFlow.h"
 #include "AP_OpticalFlow_Onboard.h"
+#include "AP_OpticalFlow_SITL.h"
+#include "AP_OpticalFlow_Pixart.h"
+#include "AP_OpticalFlow_PX4Flow.h"
 
 extern const AP_HAL::HAL& hal;
 
@@ -54,12 +58,20 @@ const AP_Param::GroupInfo OpticalFlow::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_POS", 4, OpticalFlow, _pos_offset, 0.0f),
 
+    // @Param: _ADDR
+    // @DisplayName: Address on the bus
+    // @Description: This is used to select between multiple possible I2C addresses for some sensor types. For PX4Flow you can choose 0 to 7 for the 8 possible addresses on the I2C bus.
+    // @Range: 0 127
+    // @User: Advanced
+    AP_GROUPINFO("_ADDR", 5,  OpticalFlow, _address,   0),
+    
     AP_GROUPEND
 };
 
 // default constructor
 OpticalFlow::OpticalFlow(AP_AHRS_NavEKF &ahrs)
-    : _last_update_ms(0)
+    : _ahrs(ahrs),
+      _last_update_ms(0)
 {
     AP_Param::setup_object_defaults(this, var_info);
 
@@ -71,24 +83,38 @@ OpticalFlow::OpticalFlow(AP_AHRS_NavEKF &ahrs)
 
 void OpticalFlow::init(void)
 {
+    // return immediately if not enabled
+    if (!_enabled) {
+        return;
+    }
+
     if (!backend) {
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
-        backend = new AP_OpticalFlow_PX4(*this);
+#if AP_FEATURE_BOARD_DETECT
+        if (AP_BoardConfig::get_board_type() == AP_BoardConfig::PX4_BOARD_PIXHAWK ||
+            AP_BoardConfig::get_board_type() == AP_BoardConfig::PX4_BOARD_PIXHAWK2 ||
+            AP_BoardConfig::get_board_type() == AP_BoardConfig::PX4_BOARD_PCNC1) {
+            // possibly have pixhart on external SPI
+            backend = AP_OpticalFlow_Pixart::detect("pixartflow", *this);
+        }
+        if (AP_BoardConfig::get_board_type() == AP_BoardConfig::PX4_BOARD_SP01) {
+            backend = AP_OpticalFlow_Pixart::detect("pixartPC15", *this);
+        }
+        if (backend == nullptr) {
+            backend = AP_OpticalFlow_PX4Flow::detect(*this);
+        }
 #elif CONFIG_HAL_BOARD == HAL_BOARD_SITL
-        backend = new AP_OpticalFlow_HIL(*this);
+        backend = new AP_OpticalFlow_SITL(*this);
+#elif CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_LINUX_BEBOP
+        backend = new AP_OpticalFlow_Onboard(*this);
 #elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
-        backend = new AP_OpticalFlow_Linux(*this, hal.i2c_mgr->get_device(HAL_OPTFLOW_PX4FLOW_I2C_BUS, HAL_OPTFLOW_PX4FLOW_I2C_ADDRESS));
-#elif CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_LINUX_BEBOP ||\
-    CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_LINUX_MINLURE ||\
-    CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_LINUX_BBBMINI
-        backend = new AP_OpticalFlow_Onboard(*this, ahrs);
+        backend = AP_OpticalFlow_PX4Flow::detect(*this);
+#elif CONFIG_HAL_BOARD_SUBTYPE == HAL_BOARD_SUBTYPE_CHIBIOS_SKYVIPER_F412
+        backend = AP_OpticalFlow_Pixart::detect("pixartflow", *this);
 #endif
     }
 
     if (backend != nullptr) {
         backend->init();
-    } else {
-        _enabled = 0;
     }
 }
 
@@ -101,9 +127,3 @@ void OpticalFlow::update(void)
     _flags.healthy = (AP_HAL::millis() - _last_update_ms < 500);
 }
 
-void OpticalFlow::setHIL(const struct OpticalFlow::OpticalFlow_state &state)
-{
-    if (backend) {
-        backend->_update_frontend(state);
-    }
-}

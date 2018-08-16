@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <stdbool.h>
 
 #include "AP_HAL_Namespace.h"
 #include "AP_HAL_Boards.h"
@@ -20,8 +19,10 @@
 #include "Util.h"
 #include "OpticalFlow.h"
 
-#include "utility/Print.h"
-#include "utility/Stream.h"
+#if HAL_WITH_UAVCAN
+#include "CAN.h"
+#endif
+
 #include "utility/BetterStream.h"
 
 /* HAL Class definition */
